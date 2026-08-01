@@ -45,7 +45,7 @@ cp "$(dirname "$0")/tcplugin.icns" "$BUNDLE/Contents/Resources/tcplugin.icns"
 cat > "$BUNDLE/Contents/Resources/manifest.json" <<JSON
 {
   "id": "com.tc4mac.sample.iphone",
-  "displayName": "iPhone photos (sample)",
+  "displayName": "iPhone",
   "version": "1.0.0",
   "minHostVersion": "0.1.0",
   "types": ["filesystem"],
@@ -57,7 +57,11 @@ JSON
 # tc4mac without the per-plugin Trust Anyway… override:
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./make-plugin.sh
 if [ -n "${SIGN_IDENTITY:-}" ]; then
-  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BUNDLE"
+  # The camera entitlement is REQUIRED: hardened runtime silently denies
+  # camera-class devices (the iPhone, per ImageCaptureCore) without it —
+  # the device browser then finds nothing, forever, with no error.
+  codesign --force --options runtime --timestamp \
+    --entitlements plugin.entitlements --sign "$SIGN_IDENTITY" "$BUNDLE"
   codesign --verify --strict "$BUNDLE"
   echo "signed as: $SIGN_IDENTITY"
 fi

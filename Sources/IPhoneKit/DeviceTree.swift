@@ -23,7 +23,7 @@ public struct DeviceItem: Sendable, Equatable {
     }
 }
 
-/// What a device source must answer. `ImageCaptureSource` is the real one;
+/// What a device source must answer. `AFCSource` is the real one;
 /// tests use a fixture, which is the only way to exercise the path layout
 /// without hardware.
 public protocol DeviceSource: Sendable {
