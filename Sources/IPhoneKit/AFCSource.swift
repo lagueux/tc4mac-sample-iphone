@@ -100,14 +100,26 @@ public final class AFCSource: DeviceSource, @unchecked Sendable {
     }
 
     public func data(onDevice device: String, at path: String) async throws -> Data {
+        let local = try await download(onDevice: device, at: path)
+        defer { try? FileManager.default.removeItem(at: local) }
+        return try Data(contentsOf: local)
+    }
+
+    /// `afcclient get` straight to a temporary file, which the caller serves
+    /// from and deletes — the bytes never sit in memory whole.
+    public func download(onDevice device: String, at path: String) async throws -> URL {
         let udid = try await udid(for: device)
         let local = FileManager.default.temporaryDirectory
             .appendingPathComponent("afc-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: local) }
-        _ = try await Self.run(
-            "afcclient", ["-u", udid, "--", "get", Self.remote(path), local.path],
-            timeout: 600)
-        return try Data(contentsOf: local)
+        do {
+            _ = try await Self.run(
+                "afcclient", ["-u", udid, "--", "get", Self.remote(path), local.path],
+                timeout: 600)
+        } catch {
+            try? FileManager.default.removeItem(at: local)
+            throw error
+        }
+        return local
     }
 
     // MARK: - Helpers

@@ -33,6 +33,20 @@ public protocol DeviceSource: Sendable {
     func items(onDevice device: String, at path: String) async throws -> [DeviceItem]
     /// The bytes of one item.
     func data(onDevice device: String, at path: String) async throws -> Data
+    /// One item copied to a local temporary file the CALLER deletes — so a
+    /// large video is served in chunks from disk instead of being held in
+    /// memory whole (SDK 2 pull reads).
+    func download(onDevice device: String, at path: String) async throws -> URL
+}
+
+public extension DeviceSource {
+    /// Sources without a native download spill `data` to a temporary file.
+    func download(onDevice device: String, at path: String) async throws -> URL {
+        let local = FileManager.default.temporaryDirectory
+            .appendingPathComponent("afc-\(UUID().uuidString)")
+        try await data(onDevice: device, at: path).write(to: local)
+        return local
+    }
 }
 
 /// Turns the plugin's flat paths into device-and-path pairs. An iPhone's

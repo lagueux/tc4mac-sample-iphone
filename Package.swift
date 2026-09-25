@@ -5,7 +5,7 @@ let package = Package(
     name: "IPhonePlugin",
     platforms: [.macOS(.v15)],
     dependencies: [
-        .package(url: "https://github.com/lagueux/tc4mac-plugin-sdk.git", from: "1.2.0")
+        .package(url: "https://github.com/lagueux/tc4mac-plugin-sdk.git", from: "2.0.0")
     ],
     targets: [
         .target(

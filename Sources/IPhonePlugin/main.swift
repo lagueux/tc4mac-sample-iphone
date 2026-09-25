@@ -23,6 +23,12 @@ final class Runner: @unchecked Sendable {
     private let writeLock = NSLock()
     private var buffer = Data()
 
+    /// SDK 2 open reads: the downloaded temp file per handle. Requests run
+    /// concurrently, so the table is lock-guarded.
+    private let readersLock = NSLock()
+    private var readers: [Int: (file: FileHandle, url: URL)] = [:]
+    private var nextHandle = 0
+
     func run() {
         while let frame = nextFrame() {
             guard let request = try? JSONDecoder().decode(PluginWire.Request.self, from: frame)
@@ -82,23 +88,37 @@ final class Runner: @unchecked Sendable {
                     name: item.name, isDirectory: item.isFolder,
                     size: item.size, modified: item.created))
 
-            case PluginWire.Method.read:
-                let ask: PluginPayload.Path = try decode(request)
+            // SDK 2: the host PULLS bytes a chunk at a time. The file is
+            // downloaded once to a temp file and served from disk, so neither
+            // this process nor tc4mac ever holds a large video in memory.
+            case PluginWire.Method.openRead:
+                let ask: PluginPayload.OpenRead = try decode(request)
                 let (device, inner) = DevicePath.split(ask.path)
                 guard let device, DevicePath.isSafe(ask.path) else {
                     throw PluginError.notFound(ask.path)
                 }
-                let data = try await source.data(onDevice: device, at: inner)
-                // Chunked, so a large video does not become one enormous frame.
-                let chunk = 256 * 1024
-                var offset = 0
-                repeat {
-                    let end = min(offset + chunk, data.count)
-                    try reply(
-                        request.id, PluginPayload.Chunk(data: data.subdata(in: offset..<end)),
-                        isFinal: end >= data.count)
-                    offset = end
-                } while offset < data.count
+                let local = try await source.download(onDevice: device, at: inner)
+                let file: FileHandle
+                do {
+                    file = try FileHandle(forReadingFrom: local)
+                    if ask.offset > 0 { try file.seek(toOffset: ask.offset) }
+                } catch {
+                    try? FileManager.default.removeItem(at: local)
+                    throw error
+                }
+                try reply(request.id, PluginPayload.Handle(handle: register(file, local)))
+
+            case PluginWire.Method.readChunk:
+                let ask: PluginPayload.ReadChunk = try decode(request)
+                guard let reader = reader(ask.handle) else { throw PluginError.notFound("handle") }
+                let size = max(1, min(ask.maxBytes, PluginWire.maxChunkBytes))
+                let bytes = try reader.file.read(upToCount: size) ?? Data()
+                try reply(request.id, PluginPayload.Chunk(data: bytes))  // empty = end of file
+
+            case PluginWire.Method.closeRead:
+                let ask: PluginPayload.Handle = try decode(request)
+                close(ask.handle)
+                try send(PluginWire.Response(id: request.id))  // empty acknowledgement
 
             default:
                 try fail(request.id, .notSupported(request.method))
@@ -137,6 +157,30 @@ final class Runner: @unchecked Sendable {
                 name: $0.name, isDirectory: $0.isFolder,
                 size: $0.size, modified: $0.created)
         }))
+    }
+
+    private func register(_ file: FileHandle, _ url: URL) -> Int {
+        readersLock.lock()
+        defer { readersLock.unlock() }
+        nextHandle += 1
+        readers[nextHandle] = (file, url)
+        return nextHandle
+    }
+
+    private func reader(_ handle: Int) -> (file: FileHandle, url: URL)? {
+        readersLock.lock()
+        defer { readersLock.unlock() }
+        return readers[handle]
+    }
+
+    /// Closes the handle and deletes its temp file.
+    private func close(_ handle: Int) {
+        readersLock.lock()
+        let reader = readers.removeValue(forKey: handle)
+        readersLock.unlock()
+        guard let reader else { return }
+        try? reader.file.close()
+        try? FileManager.default.removeItem(at: reader.url)
     }
 
     private func decode<T: Decodable>(_ request: PluginWire.Request) throws -> T {
